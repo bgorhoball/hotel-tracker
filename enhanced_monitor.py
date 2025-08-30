@@ -121,13 +121,29 @@ class EnhancedHotelMonitor:
             response = self.session.get(self.config['api_url'], params=params, timeout=30)
             response.raise_for_status()
             
-            # Parse JSONP
-            json_match = re.search(r'jsonp\d+\((.*)\);?$', response.text, re.DOTALL)
+            # Parse JSONP - the API uses getStockData instead of jsonp callback
+            self.logger.debug(f"API response: {response.text[:200]}...")
+            
+            # Try different JSONP patterns
+            json_match = re.search(r'(?:jsonp\d+|getStockData)\((.*)\);?\s*$', response.text, re.DOTALL)
             if not json_match:
-                self.logger.error("Failed to parse JSONP response")
+                self.logger.error(f"Failed to parse JSONP response. First 500 chars: {response.text[:500]}")
                 return None
             
-            return json.loads(json_match[1])
+            json_str = json_match[1]
+            self.logger.debug(f"Extracted JSON: {json_str[:300]}...")
+            
+            # Fix JSON format - convert single quotes to double quotes and clean up
+            json_str = json_str.replace("'", '"')
+            
+            # Handle HTML entities and control characters
+            import html
+            json_str = html.unescape(json_str)
+            
+            # Remove or replace problematic characters
+            json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
+            
+            return json.loads(json_str)
             
         except Exception as e:
             self.logger.error(f"API call failed: {e}")
