@@ -39,7 +39,7 @@ class EnhancedHotelMonitor:
             'email': {
                 'enabled': bool(os.getenv('EMAIL_USER')),
                 'smtp_server': os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
-                'smtp_port': int(os.getenv('SMTP_PORT', '587')),
+                'smtp_port': int(os.getenv('SMTP_PORT', '587')) if os.getenv('SMTP_PORT') else 587,
                 'user': os.getenv('EMAIL_USER'),
                 'password': os.getenv('EMAIL_PASS'),
                 'to': os.getenv('NOTIFY_EMAIL')
