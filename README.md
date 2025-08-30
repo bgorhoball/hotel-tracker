@@ -35,6 +35,8 @@ Go to your repository → Settings → Secrets and variables → Actions, then a
 - `SLACK_WEBHOOK`: Slack webhook URL  
 - `PUSHOVER_TOKEN`: Pushover app token
 - `PUSHOVER_USER`: Pushover user key
+- `TELEGRAM_BOT_TOKEN`: Telegram bot token
+- `TELEGRAM_CHAT_ID`: Telegram chat/user ID
 
 ### 3. Configure Target Dates
 
@@ -88,6 +90,34 @@ python enhanced_monitor.py --mode single
 
 # Continuous monitoring (for testing)
 python enhanced_monitor.py --mode monitor
+```
+
+## Telegram Bot Setup
+
+### 1. Create Telegram Bot
+1. Message [@BotFather](https://t.me/BotFather) on Telegram
+2. Send `/newbot`
+3. Follow prompts to create bot
+4. Copy the bot token (format: `123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`)
+
+### 2. Get Chat ID
+**Option A - Message your bot:**
+1. Start a chat with your bot
+2. Send any message
+3. Visit: `https://api.telegram.org/bot<BOT_TOKEN>/getUpdates`
+4. Find your chat ID in the JSON response
+
+**Option B - Use @userinfobot:**
+1. Message [@userinfobot](https://t.me/userinfobot) 
+2. It will reply with your user ID
+
+### 3. Add to GitHub Secrets:
+```
+Name: TELEGRAM_BOT_TOKEN
+Value: 123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+
+Name: TELEGRAM_CHAT_ID  
+Value: 123456789
 ```
 
 ## How It Works

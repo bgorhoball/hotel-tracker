@@ -56,6 +56,11 @@ class EnhancedHotelMonitor:
                 'enabled': bool(os.getenv('PUSHOVER_TOKEN')),
                 'token': os.getenv('PUSHOVER_TOKEN'),
                 'user': os.getenv('PUSHOVER_USER')
+            },
+            'telegram': {
+                'enabled': bool(os.getenv('TELEGRAM_BOT_TOKEN') and os.getenv('TELEGRAM_CHAT_ID')),
+                'bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
+                'chat_id': os.getenv('TELEGRAM_CHAT_ID')
             }
         }
         
@@ -358,12 +363,37 @@ class EnhancedHotelMonitor:
         except Exception as e:
             self.logger.error(f"Failed to send Pushover notification: {e}")
     
+    def send_telegram_notification(self, message: str):
+        """Send Telegram notification"""
+        if not self.notifications['telegram']['enabled']:
+            return
+        
+        try:
+            # Format message for Telegram (use Markdown)
+            telegram_message = f"🏨 *Hotel Room Alert*\n\n{message}"
+            
+            payload = {
+                "chat_id": self.notifications['telegram']['chat_id'],
+                "text": telegram_message,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True
+            }
+            
+            url = f"https://api.telegram.org/bot{self.notifications['telegram']['bot_token']}/sendMessage"
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            
+            self.logger.info("Telegram notification sent")
+        except Exception as e:
+            self.logger.error(f"Failed to send Telegram notification: {e}")
+    
     def notify_all(self, message: str, subject: str = "Hotel Room Alert"):
         """Send notifications to all configured channels"""
         self.send_email_notification(message, subject)
         self.send_discord_notification(message)
         self.send_slack_notification(message)
         self.send_pushover_notification(message, subject)
+        self.send_telegram_notification(message)
     
     def format_notification_message(self, changes: dict) -> str:
         """Format notification message"""
