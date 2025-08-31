@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 import logging
+from bs4 import BeautifulSoup
 
 @dataclass
 class RoomAvailability:
@@ -24,11 +25,28 @@ class RoomAvailability:
 
 class EnhancedHotelMonitor:
     def __init__(self):
+        # Support multiple hotels
+        self.hotels = [
+            {
+                'name': 'Kamikochi Taisho-ike Hotel',
+                'hotel_id': '20000122',
+                'plan_id': '2',
+                'target_dates': ['2025-10-24', '2025-10-25'],
+                'api_url': 'https://www2.489pro.com/www1/api/ypro/v2plus/ypro_stocksearch_api.asp',
+                'api_type': 'jsonp'
+            },
+            {
+                'name': 'Ginzanso',
+                'year': '2026',
+                'month': '2',
+                'plan_type': '1',
+                'target_dates': ['2026-02'],  # Monitor entire February 2026
+                'api_url': 'https://reserve.489ban.net/client/ginzanso/2/plan/availability/dailycalendar',
+                'api_type': 'html_calendar'
+            }
+        ]
+        
         self.config = {
-            'hotel_id': '20000122',
-            'plan_id': '2',
-            'target_dates': ['2025-10-24', '2025-10-25'],
-            'api_url': 'https://www2.489pro.com/www1/api/ypro/v2plus/ypro_stocksearch_api.asp',
             'check_interval': 300,  # 5 minutes
             'state_file': 'monitor_state.json',
             'log_file': 'hotel_monitor.log'
@@ -98,76 +116,123 @@ class EnhancedHotelMonitor:
         end_date = (monday + timedelta(days=6)).strftime("%Y/%m/%d")
         return start_date, end_date
     
-    def call_api(self) -> Optional[dict]:
+    def call_api(self, hotel_config) -> Optional[dict]:
         """Call hotel API and return parsed data"""
         try:
-            # Get date range for first target date
-            start_date, end_date = self.get_week_dates(self.config['target_dates'][0])
-            
-            timestamp = str(int(time.time() * 1000))
-            params = {
-                'id': self.config['hotel_id'],
-                'planId': self.config['plan_id'],
-                'startDate': start_date,
-                'endDate': end_date,
-                'input_data': f'id=stock_calendar_1,start_date={start_date},end_date={end_date},select_room=,select_plan={self.config["plan_id"]},user_num=2,init_flag=0,disp_cal_room=1,disp_cal_plan=,disp_cal_plan_btn=1,init_plan_num=0,kid=',
-                'ty': 'ser',
-                'mo': '0',
-                'meo': '0',
-                'yr': 'YES',
-                'lan': 'JPN',
-                'pt': '-1',
-                'mel': '-1',
-                'pay': '0',
-                'callback': f'jsonp{timestamp}',
-                '_': timestamp
-            }
-            
-            response = self.session.get(self.config['api_url'], params=params, timeout=30)
-            response.raise_for_status()
-            
-            # Parse JSONP - the API uses getStockData instead of jsonp callback
-            self.logger.debug(f"API response: {response.text[:200]}...")
-            
-            # Try different JSONP patterns
-            json_match = re.search(r'(?:jsonp\d+|getStockData)\((.*)\);?\s*$', response.text, re.DOTALL)
-            if not json_match:
-                self.logger.error(f"Failed to parse JSONP response. First 500 chars: {response.text[:500]}")
+            if hotel_config['api_type'] == 'jsonp':
+                return self.call_jsonp_api(hotel_config)
+            elif hotel_config['api_type'] == 'html_calendar':
+                return self.call_html_calendar_api(hotel_config)
+            else:
+                self.logger.error(f"Unknown API type: {hotel_config['api_type']}")
                 return None
-            
-            json_str = json_match[1]
-            self.logger.debug(f"Extracted JSON: {json_str[:300]}...")
-            
-            # Fix JSON format - convert single quotes to double quotes and clean up
-            json_str = json_str.replace("'", '"')
-            
-            # Handle HTML entities and control characters
-            import html
-            json_str = html.unescape(json_str)
-            
-            # Remove or replace problematic characters
-            json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
-            
-            return json.loads(json_str)
-            
         except Exception as e:
-            self.logger.error(f"API call failed: {e}")
+            self.logger.error(f"API call failed for {hotel_config['name']}: {e}")
             return None
+
+    def call_jsonp_api(self, hotel_config) -> Optional[dict]:
+        """Call JSONP-based hotel API"""
+        # Get date range for first target date
+        start_date, end_date = self.get_week_dates(hotel_config['target_dates'][0])
+        
+        timestamp = str(int(time.time() * 1000))
+        params = {
+            'id': hotel_config['hotel_id'],
+            'planId': hotel_config['plan_id'],
+            'startDate': start_date,
+            'endDate': end_date,
+            'input_data': f'id=stock_calendar_1,start_date={start_date},end_date={end_date},select_room=,select_plan={hotel_config["plan_id"]},user_num=2,init_flag=0,disp_cal_room=1,disp_cal_plan=,disp_cal_plan_btn=1,init_plan_num=0,kid=',
+            'ty': 'ser',
+            'mo': '0',
+            'meo': '0',
+            'yr': 'YES',
+            'lan': 'JPN',
+            'pt': '-1',
+            'mel': '-1',
+            'pay': '0',
+            'callback': f'jsonp{timestamp}',
+            '_': timestamp
+        }
+        
+        response = self.session.get(hotel_config['api_url'], params=params, timeout=30)
+        response.raise_for_status()
+        
+        # Parse JSONP - the API uses getStockData instead of jsonp callback
+        self.logger.debug(f"API response for {hotel_config['name']}: {response.text[:200]}...")
+        
+        # Try different JSONP patterns
+        json_match = re.search(r'(?:jsonp\d+|getStockData)\((.*)\);?\s*$', response.text, re.DOTALL)
+        if not json_match:
+            self.logger.error(f"Failed to parse JSONP response for {hotel_config['name']}. First 500 chars: {response.text[:500]}")
+            return None
+        
+        json_str = json_match[1]
+        self.logger.debug(f"Extracted JSON for {hotel_config['name']}: {json_str[:300]}...")
+        
+        # Fix JSON format - convert single quotes to double quotes and clean up
+        json_str = json_str.replace("'", '"')
+        
+        # Handle HTML entities and control characters
+        import html
+        json_str = html.unescape(json_str)
+        
+        # Remove or replace problematic characters
+        json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
+        
+        return json.loads(json_str)
+
+    def call_html_calendar_api(self, hotel_config) -> Optional[dict]:
+        """Call HTML calendar-based hotel API"""
+        timestamp = str(int(time.time() * 1000))
+        params = {
+            'year': hotel_config['year'],
+            'month': hotel_config['month'],
+            'planType': hotel_config['plan_type'],
+            '_': timestamp
+        }
+        
+        # Create a separate session with appropriate headers for this hotel
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+            'Referer': 'https://reserve.489ban.net/client/ginzanso/2/',
+            'X-Requested-With': 'XMLHttpRequest'
+        })
+        
+        response = session.get(hotel_config['api_url'], params=params, timeout=30)
+        response.raise_for_status()
+        
+        self.logger.debug(f"HTML Calendar API response for {hotel_config['name']}: {response.text[:200]}...")
+        
+        return response.json()
     
-    def analyze_data(self, api_data: dict) -> List[RoomAvailability]:
+    def analyze_data(self, api_data: dict, hotel_config: dict) -> List[RoomAvailability]:
         """Analyze API data and return availability info"""
+        if hotel_config['api_type'] == 'jsonp':
+            return self.analyze_jsonp_data(api_data, hotel_config)
+        elif hotel_config['api_type'] == 'html_calendar':
+            return self.analyze_html_calendar_data(api_data, hotel_config)
+        else:
+            return []
+
+    def analyze_jsonp_data(self, api_data: dict, hotel_config: dict) -> List[RoomAvailability]:
+        """Analyze JSONP API data"""
         if not api_data or 'rooms' not in api_data:
             return []
         
         results = []
         
         for room in api_data.get('rooms', []):
-            room_name = room.get('room_name_eng', f"Room {room.get('room_id')}")
+            room_id = room.get('room_id', 'Unknown')
+            room_eng_name = room.get('room_name_eng', f'Room {room_id}')
+            room_name = f"{hotel_config['name']} - {room_eng_name}"
             
             for aki in room.get('aki', []):
                 date = aki.get('aki_date', '').replace('/', '-')
                 
-                if date in self.config['target_dates']:
+                if date in hotel_config['target_dates']:
                     available = int(aki.get('aki_num', 0))
                     sold_out = int(aki.get('sold_out_f', 0))
                     
@@ -192,6 +257,84 @@ class EnhancedHotelMonitor:
                         date=date,
                         available_count=available,
                         price=price,
+                        status=status
+                    ))
+        
+        return results
+
+    def analyze_html_calendar_data(self, api_data: dict, hotel_config: dict) -> List[RoomAvailability]:
+        """Analyze HTML calendar API data"""
+        results = []
+        
+        # Find the target month data (February 2026 should be in key "2")
+        target_month_data = None
+        for key, month_data in api_data.items():
+            if isinstance(month_data, dict) and 'calendarCaption' in month_data:
+                if '2026年2月' in month_data['calendarCaption']:
+                    target_month_data = month_data
+                    break
+        
+        if not target_month_data:
+            self.logger.warning(f"Could not find February 2026 data for {hotel_config['name']}")
+            return results
+        
+        # Parse calendar data
+        
+        for week in target_month_data.get('data', []):
+            for day_name, html_content in week.items():
+                if not html_content or not isinstance(html_content, str):
+                    continue
+                
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+                # Extract date from class attribute
+                date_elem = soup.find(class_=re.compile(r'2026-02-\d+'))
+                if not date_elem:
+                    continue
+                
+                date_str = None
+                for class_name in date_elem.get('class', []):
+                    if class_name.startswith('2026-02-'):
+                        date_str = class_name
+                        break
+                
+                if not date_str:
+                    continue
+                
+                # Check for availability icons
+                icons = soup.find_all('i')
+                status = 'not_bookable'
+                available_count = 0
+                
+                for icon in icons:
+                    icon_classes = ' '.join(icon.get('class', []))
+                    
+                    if 'fa-regular fa-circle' in icon_classes:
+                        # Available rooms (○)
+                        status = 'available'
+                        available_count = 1  # We don't know exact count from HTML
+                        break
+                    elif 'fa-solid fa-triangle-exclamation' in icon_classes:
+                        # Few rooms left (△)
+                        status = 'available'
+                        available_count = 1
+                        break
+                    elif 'fa-solid fa-xmark' in icon_classes:
+                        # Sold out (×)
+                        status = 'sold_out'
+                        break
+                    elif 'fa-solid fa-minus text-danger' in icon_classes:
+                        # Not yet released (-)
+                        status = 'not_released'
+                        break
+                
+                # Only report if it's not the "not released" status (we want to detect when it changes from minus to something else)
+                if status != 'not_released':
+                    results.append(RoomAvailability(
+                        room_name=f"{hotel_config['name']} - Room",
+                        date=date_str,
+                        available_count=available_count,
+                        price='Check website',
                         status=status
                     ))
         
@@ -399,7 +542,11 @@ class EnhancedHotelMonitor:
         """Format notification message"""
         lines = ["Hotel Availability Update\n"]
         lines.append(f"Check time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"Target dates: {', '.join(self.config['target_dates'])}\n")
+        # Show all target dates from all hotels
+        all_dates = set()
+        for hotel in self.hotels:
+            all_dates.update(hotel['target_dates'])
+        lines.append(f"Target dates: {', '.join(sorted(all_dates))}\n")
         
         if changes['new_available']:
             lines.append("NEW ROOMS AVAILABLE:")
@@ -420,31 +567,45 @@ class EnhancedHotelMonitor:
         else:
             lines.append("No rooms currently available")
         
-        lines.append(f"\nBook now: https://www.489pro.com/asp/489/menu.asp?id={self.config['hotel_id']}&ty=ser")
+        # Add booking links for each hotel
+        lines.append("\nBooking Links:")
+        for hotel in self.hotels:
+            lines.append(f"• {hotel['name']}: https://www.489pro.com/asp/489/menu.asp?id={hotel['hotel_id']}&ty=ser")
         
         return "\n".join(lines)
     
     def run_single_check(self):
-        """Run a single availability check"""
-        self.logger.info("Starting availability check...")
+        """Run a single availability check for all hotels"""
+        self.logger.info("Starting availability check for all hotels...")
         
-        # Get current data
-        api_data = self.call_api()
-        if not api_data:
-            self.logger.error("Failed to get API data")
-            return
+        all_availability = []
         
-        current_availability = self.analyze_data(api_data)
+        # Check each hotel
+        for i, hotel_config in enumerate(self.hotels):
+            self.logger.info(f"Checking {hotel_config['name']}...")
+            
+            # Add delay between hotels to avoid rate limiting
+            if i > 0:
+                time.sleep(2)
+            
+            # Get current data for this hotel
+            api_data = self.call_api(hotel_config)
+            if not api_data:
+                self.logger.error(f"Failed to get API data for {hotel_config['name']}")
+                continue
+            
+            hotel_availability = self.analyze_data(api_data, hotel_config)
+            all_availability.extend(hotel_availability)
         
         # Load previous state
         state = self.load_state()
         
-        # Detect changes
-        changes = self.detect_changes(current_availability, state.get('last_available', []))
+        # Detect changes across all hotels
+        changes = self.detect_changes(all_availability, state.get('last_available', []))
         
         # Log current status
         available_count = len(changes['current_available'])
-        self.logger.info(f"Found {available_count} available room-date combinations")
+        self.logger.info(f"Found {available_count} available room-date combinations across all hotels")
         
         # Send notifications if there are changes
         if changes['has_changes']:
@@ -459,7 +620,7 @@ class EnhancedHotelMonitor:
                 self.notify_all(message, subject)
                 self.logger.info(f"Sent notifications for {len(changes['lost_available'])} lost rooms")
         else:
-            self.logger.info("No changes detected")
+            self.logger.info("No changes detected across all hotels")
         
         # Update state
         new_state = {
@@ -470,7 +631,7 @@ class EnhancedHotelMonitor:
         self.save_state(new_state)
         
         # Print summary
-        self.print_summary(current_availability, changes)
+        self.print_summary(all_availability, changes)
     
     def print_summary(self, availability: List[RoomAvailability], changes: dict):
         """Print summary of current status"""
@@ -478,7 +639,11 @@ class EnhancedHotelMonitor:
         print("HOTEL AVAILABILITY SUMMARY")
         print("="*70)
         print(f"Check time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Target dates: {', '.join(self.config['target_dates'])}")
+        # Show all target dates from all hotels
+        all_dates = set()
+        for hotel in self.hotels:
+            all_dates.update(hotel['target_dates'])
+        print(f"Target dates: {', '.join(sorted(all_dates))}")
         
         available = [r for r in availability if r.status == 'available']
         sold_out = [r for r in availability if r.status == 'sold_out']
